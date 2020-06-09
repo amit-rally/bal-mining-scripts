@@ -268,6 +268,14 @@ async function getRewardsAtBlock(i, pools, prices, poolProgress) {
                     pool.controller
                 ] = finalPoolMarketCapFactor.toString();
             }
+
+            // Add this pool liquidity to total user liquidity
+            if (userLiquidity[pool.controller]) {
+                userLiquidity[pool.controller] += userPoolValue;
+            } else {
+                userLiquidity[pool.controller] = userPoolValue;
+            }
+
         } else {
             // Shared pool
 
