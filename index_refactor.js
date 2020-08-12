@@ -1,15 +1,15 @@
-// pools is a list of obj pool
-pool = obj(
-    address: address
-    poolFee: poolFee
-    tokens: token[]
-    )
+// // pools is a list of obj pool
+// pool = obj(
+//     address: address
+//     poolFee: poolFee
+//     tokens: token[]
+//     )
 
-// tokens is a list of object token
-token = obj(
-    address,
-    normWeight,
-    )
+// // tokens is a list of object token
+// token = obj(
+//     address,
+//     normWeight,
+//     )
 
 // rawLiquidity[pool.address][token.address] = rawLiquidity of token in pool
 // poolOwnershipSharePerLP[pool.address][lpAddress] = share (%) of LP in pool
@@ -525,7 +525,7 @@ async function getRewardsAtBlock(i, poolsSubgraph, prices, poolProgress) {
     //// 3rd and last iteration
     // Check if balMultiplierIncreasePercentage is above limit 
     // TODO: put this constant in config file   
-    const balMultiplierIncreasePercentageCap = bnum(0.3333333) // This means that with a balMultiplier applied, 
+    const balMultiplierIncreasePercentageCap = bnum(0.3333333); // This means that with a balMultiplier applied, 
     // the total adjusted liquidity
     // should not increase by more than 20% compared to the adjusted liquidity without it.
     if (balMultiplierIncreasePercentage > balMultiplierIncreasePercentageCap){
