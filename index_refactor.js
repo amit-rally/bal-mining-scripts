@@ -211,7 +211,7 @@ function getTotalTokenAdjustedLiquidity(rawLiquidity, pools){
                 let adjustedLiquidityPair = getAdjustedLiquidityForPair(
                     rawLiquidityPair, 
                     feeFactor, 
-                    balMultiplier, 
+                    1, // balMultiplier = 1
                     token1, 
                     weight1, 
                     token2, 
@@ -238,8 +238,7 @@ function getTotalTokenAdjustedLiquidity(rawLiquidity, pools){
 }
 
 function getAdjustedLiquidity(rawLiquidity, 
-    pools, poolOwnershipSharePerLP, tokenCapFactors, stakingCapFactor, balMultiplier, 
-    balDistributedPerSnapshot){
+    pools, poolOwnershipSharePerLP, tokenCapFactors, balMultiplier){
     // First adjust the liquidity according to tokenCapFactors
     let poolRawLiquidityAfterTokenCap = {}
     for (const pool of pools) {
@@ -251,6 +250,7 @@ function getAdjustedLiquidity(rawLiquidity,
                     rawLiquidity[pool.address][token.address]
                     .times(tokenCapFactors[token.address])
                 );
+        }
     }
 
     // Now we calculate the adjusted liquidity for each pool after all the factors
@@ -483,255 +483,61 @@ const BAL_PER_SNAPSHOT = BAL_PER_WEEK.div(
 ); // Ceiling because it includes end block
 
 async function getRewardsAtBlock(i, poolsSubgraph, prices, poolProgress) {
-    let totalBalancerLiquidity = bnum(0);
-
-    let block = await web3.eth.getBlock(i);
-
-    let rawLiquidity = {};
-    let pools = [];
-
-    let allPoolData = [];
-    let userPools = {};
-    let userLiquidity = {};
-    let tokenTotalMarketCaps = {};
-
+    
     poolProgress.update(0, { task: `Block ${i} Progress` });
+    
+    // For this block, load onchain data and build rawLiquidity, pools, poolOwnershipSharePerLP
+    [rawLiquidity, pools, poolOwnershipSharePerLP] = 
+        loadOnchainDataForBlock(i, poolsSubgraph, prices);
 
-    for (const poolSubgraph of poolsSubgraph) {
-        let pool = {}
-        pool.address = poolSubgraph.id;
-        rawLiquidity[pool.address] = {};
+    // Defines caps in adjusted liquidity (USD) for each token
+    // const tokenCapFactors; // Initialize with 1 for all tokens
+    totalTokenAdjustedLiquidity = 
+        getTotalTokenAdjustedLiquidity(rawLiquidity, pools);
 
-        // Check if at least two tokens have a price
-        let atLeastTwoTokensHavePrice = false;
-        let nTokensHavePrice = 0;
-
-        if (pool.createTime > block.timestamp || !pool.tokensList) {
-            continue;
+    // Calculate tokenCapFactors based on adjusted liquidity calculated in 1st iteration
+    tokenCapFactors = {};
+    for (const token of totalTokenAdjustedLiquidity) {
+        if(totalTokenAdjustedLiquidity[token]>tokenLiquidityCaps[token]){
+            tokenCapFactors[token] = tokenLiquidityCaps[token]/totalTokenAdjustedLiquidity[token];
         }
-
-        let bPool = new web3.eth.Contract(poolAbi, pool.address);
-
-        let publicSwap = await bPool.methods.isPublicSwap().call(undefined, i);
-        if (!publicSwap) {
-            continue;
-        }
-
-        let currentTokens = await bPool.methods
-            .getCurrentTokens()
-            .call(undefined, i);
-
-        for (const t of currentTokens) {
-            let token = web3.utils.toChecksumAddress(t);
-            if (prices[token] !== undefined && prices[token].length > 0) {
-                nTokensHavePrice++;
-                if (nTokensHavePrice > 1) {
-                    atLeastTwoTokensHavePrice = true;
-                    break;
-                }
-            }
-        }
-
-        if (!atLeastTwoTokensHavePrice) {
-            continue;
-        }
-
-        let poolRawLiquidity = bnum(0);
-        let originalPoolMarketCapFactor = bnum(0);
-        let eligibleTotalWeight = bnum(0);
-        let poolRatios = [];
-
-        for (const t of currentTokens) {
-            // Skip token if it doesn't have a price
-            let token = web3.utils.toChecksumAddress(t);
-            if (prices[token] === undefined || prices[token].length === 0) {
-                continue;
-            }
-            let bToken = new web3.eth.Contract(token1bi, token);
-            let tokenBalanceWei = await bPool.methods
-                .getBalance(token)
-                .call(undefined, i);
-            let tokenDecimals = await bToken.methods.decimals().call();
-            let normWeight = await bPool.methods
-                .getNormalizedWeight(token)
-                .call(undefined, i);
-
-            eligibleTotalWeight = eligibleTotalWeight.plus(
-                utils.scale(normWeight, -18)
-            );
-
-            let closestPrice = prices[token].reduce((a, b) => {
-                return Math.abs(b[0] - block.timestamp * 1000) <
-                    Math.abs(a[0] - block.timestamp * 1000)
-                    ? b
-                    : a;
-            })[1];
-
-            let tokenBalance = utils.scale(tokenBalanceWei, -tokenDecimals);
-            rawLiquidity[pool.address][token] = tokenBalance.times(bnum(closestPrice)).dp(18);
-
-            if (pool.tokens) {
-                let obj = {
-                    address: token,
-                    normWeight: utils.scale(normWeight, -18),
-                };
-                pool.tokens.push(obj);
-            } else {
-                pool.tokens = [
-                    {
-                        address: token,
-                        normWeight: utils.scale(normWeight, -18),
-                    },
-                ];
-            }
-
-        pool.shareHolders = poolSubgraph.shareHolders;
-        pool.controller = poolSubgraph.controller;
-        pools.push(pool);
+        else
+            tokenCapFactors[token] = 1
     }
 
-    //// STOPPED HERE!
+    //// 1st iteration
+    // Calculate adjustedLiquidity without with balMultiplier and stakingCapFactor = 1
+    [totalAdjustedLiquidityWOBalMultiplier, balAmountPerLP] = 
+        getAdjustedLiquidity(rawLiquidity, pools, poolOwnershipSharePerLP,
+        tokenCapFactors, 1);
 
-    for (const pool of pools) {
-        let finalPoolMarketCap = bnum(0);
-        let finalPoolMarketCapFactor = bnum(0);
+    //// 2nd iteration
+    // Calculate stakingCapFactor based on how much more totalAdjustedLiquidity we'd have with balMultiplier
+    // compared to totalAdjustedLiquidity calculated above without balMultiplier
+    [totalAdjustedLiquidityWithBalMultiplier, balAmountPerLP] = 
+        getAdjustedLiquidity(rawLiquidity, pools, poolOwnershipSharePerLP,
+        tokenCapFactors, balMultiplier);
+    let balMultiplierIncreasePercentage = 
+            totalAdjustedLiquidityWithBalMultiplier
+            .div(totalAdjustedLiquidityWOBalMultiplier)
+            .minus(bnum(1));
 
-        for (const t of pool.tokens) {
-            if (
-                !uncappedTokens.includes(t.token) &&
-                bnum(tokenTotalMarketCaps[t.token]).isGreaterThan(
-                    bnum(10000000)
-                )
-            ) {
-                let tokenRawLiquidityFactor = bnum(10000000).div(
-                    tokenTotalMarketCaps[t.token]
-                );
-                adjustedTokenMarketCap = t.origMarketCap
-                    .times(tokenRawLiquidityFactor)
-                    .dp(18);
-            } else {
-                adjustedTokenMarketCap = t.origMarketCap;
-            }
-            finalPoolMarketCap = finalPoolMarketCap.plus(
-                adjustedTokenMarketCap
-            );
-        }
-
-        finalPoolMarketCapFactor = pool.feeFactor
-            .times(pool.ratioFactor)
-            .times(pool.wrapFactor)
-            .times(finalPoolMarketCap)
-            .dp(18);
-
-        totalBalancerLiquidity = totalBalancerLiquidity.plus(
-            finalPoolMarketCapFactor
-        );
-
-        let bPool = new web3.eth.Contract(poolAbi, pool.poolAddress);
-
-        let bptSupplyWei = await bPool.methods.totalSupply().call(undefined, i);
-        let bptSupply = utils.scale(bptSupplyWei, -18);
-
-        if (bptSupply.eq(bnum(0))) {
-            // Private pool
-            if (userPools[pool.controller]) {
-                userPools[pool.controller].push({
-                    pool: pool.poolAddress,
-                    feeFactor: pool.feeFactor.toString(),
-                    ratioFactor: pool.ratioFactor.toString(),
-                    wrapFactor: pool.wrapFactor.toString(),
-                    valueUSD: finalPoolMarketCap.toString(),
-                    factorUSD: finalPoolMarketCapFactor.toString(),
-                });
-            } else {
-                userPools[pool.controller] = [
-                    {
-                        pool: pool.poolAddress,
-                        feeFactor: pool.feeFactor.toString(),
-                        ratioFactor: pool.ratioFactor.toString(),
-                        wrapFactor: pool.wrapFactor.toString(),
-                        valueUSD: finalPoolMarketCap.toString(),
-                        factorUSD: finalPoolMarketCapFactor.toString(),
-                    },
-                ];
-            }
-
-            // Add this pool liquidity to total user liquidity
-            if (userLiquidity[pool.controller]) {
-                userLiquidity[pool.controller] = bnum(
-                    userLiquidity[pool.controller]
-                )
-                    .plus(finalPoolMarketCapFactor)
-                    .toString();
-            } else {
-                userLiquidity[
-                    pool.controller
-                ] = finalPoolMarketCapFactor.toString();
-            }
-        } else {
-            // Shared pool
-
-            for (const holder of pool.shareHolders) {
-                let userBalanceWei = await bPool.methods
-                    .balanceOf(holder)
-                    .call(undefined, i);
-                let userBalance = utils.scale(userBalanceWei, -18);
-                let userPoolValue = userBalance
-                    .div(bptSupply)
-                    .times(finalPoolMarketCap)
-                    .dp(18);
-
-                let userPoolValueFactor = userBalance
-                    .div(bptSupply)
-                    .times(finalPoolMarketCapFactor)
-                    .dp(18);
-
-                if (userPools[holder]) {
-                    userPools[holder].push({
-                        pool: pool.poolAddress,
-                        feeFactor: pool.feeFactor.toString(),
-                        ratioFactor: pool.ratioFactor.toString(),
-                        wrapFactor: pool.wrapFactor.toString(),
-                        valueUSD: userPoolValue.toString(),
-                        factorUSD: userPoolValueFactor.toString(),
-                    });
-                } else {
-                    userPools[holder] = [
-                        {
-                            pool: pool.poolAddress,
-                            feeFactor: pool.feeFactor.toString(),
-                            ratioFactor: pool.ratioFactor.toString(),
-                            wrapFactor: pool.wrapFactor.toString(),
-                            valueUSD: userPoolValue.toString(),
-                            factorUSD: userPoolValueFactor.toString(),
-                        },
-                    ];
-                }
-
-                // Add this pool liquidity to total user liquidity
-                if (userLiquidity[holder]) {
-                    userLiquidity[holder] = bnum(userLiquidity[holder])
-                        .plus(userPoolValueFactor)
-                        .toString();
-                } else {
-                    userLiquidity[holder] = userPoolValueFactor.toString();
-                }
-            }
-        }
-
-        poolProgress.increment(1);
-    }
-
-    // Final iteration across all users to calculate their BAL tokens for this block
-    let userBalReceived = {};
-    let balDistributedDoubleCheck = bnum(0);
-    for (const user in userLiquidity) {
-        userBalReceived[user] = bnum(userLiquidity[user])
-            .times(BAL_PER_SNAPSHOT)
-            .div(totalBalancerLiquidity);
-    }
-
-    return [userPools, userBalReceived, tokenTotalMarketCaps];
+    //// 3rd and last iteration
+    // Check if balMultiplierIncreasePercentage is above limit 
+    // TODO: put this constant in config file   
+    const balMultiplierIncreasePercentageCap = bnum(0.3333333) // This means that with a balMultiplier applied, 
+    // the total adjusted liquidity
+    // should not increase by more than 20% compared to the adjusted liquidity without it.
+    if (balMultiplierIncreasePercentage > balMultiplierIncreasePercentageCap){
+        let stakingCapFactor = balMultiplierIncreasePercentageCap
+            .div(balMultiplierIncreasePercentage)
+        // Since stakingCapFactor had to be applied we have to run the calculation again to correct for it
+        // Calculate distro with balMultiplier corrected by the stakingCapFactor
+        [totalAdjustedLiquidityWithBalMultiplier, balAmountPerLP] = 
+        getAdjustedLiquidity(rawLiquidity, pools, poolOwnershipSharePerLP,
+        tokenCapFactors, balMultiplier.times(stakingCapFactor));
+    } 
+    return [balAmountPerLP];
 }
 
 (async function () {
@@ -805,56 +611,126 @@ async function getRewardsAtBlock(i, poolsSubgraph, prices, poolProgress) {
     blockProgress.stop();
 })();
 
-// Defines caps in adjusted liquidity (USD) for each token
-// const tokenLiquidityCaps = 10
-// const stakingPercentageIncreaseCap = 0.2 // This means that with a balMultiplier applied, 
-// // the total adjusted liquidity
-// // should not increase by more than 20% compared to the adjusted liquidity without it.
+async function loadOnchainDataForBlock(i, poolsSubgraph, prices) {
+    
+    let block = await web3.eth.getBlock(i);
+
+    let rawLiquidity = {};
+    let pools = [];
 
 
-//// Calculate tokenCapFactors
-for (const token of tokens) {
-    tokenCapFactors[token] = 1 // initialize for all tokens
-}
-stakingCapFactor = 1;
+    for (const poolSubgraph of poolsSubgraph) {
+        let pool = {}
+        pool.address = poolSubgraph.id;
+        rawLiquidity[pool.address] = {};
 
-totalTokenAdjustedLiquidity = 
-    getTotalTokenAdjustedLiquidity(rawLiquidity, pools);
+        // Check if at least two tokens have a price
+        let atLeastTwoTokensHavePrice = false;
+        let nTokensHavePrice = 0;
 
-// Calculate tokenCapFactors based on adjusted liquidity calculated in 1st iteration
-for (const token of tokens) {
-    if(totalTokenAdjustedLiquidity[token]>tokenLiquidityCaps[token]){
-        tokenCapFactors[token] = tokenLiquidityCaps[token]/totalTokenAdjustedLiquidity[token];
+        if (pool.createTime > block.timestamp || !pool.tokensList) {
+            continue;
+        }
+
+        let bPool = new web3.eth.Contract(poolAbi, pool.address);
+
+        let publicSwap = await bPool.methods.isPublicSwap().call(undefined, i);
+        if (!publicSwap) {
+            continue;
+        }
+
+        let currentTokens = await bPool.methods
+            .getCurrentTokens()
+            .call(undefined, i);
+
+        for (const t of currentTokens) {
+            let token = web3.utils.toChecksumAddress(t);
+            if (prices[token] !== undefined && prices[token].length > 0) {
+                nTokensHavePrice++;
+                if (nTokensHavePrice > 1) {
+                    atLeastTwoTokensHavePrice = true;
+                    break;
+                }
+            }
+        }
+
+        if (!atLeastTwoTokensHavePrice) {
+            continue;
+        }
+
+        for (const t of currentTokens) {
+            // Skip token if it doesn't have a price
+            let token = web3.utils.toChecksumAddress(t);
+            if (prices[token] === undefined || prices[token].length === 0) {
+                continue;
+            }
+            let bToken = new web3.eth.Contract(token1bi, token);
+            let tokenBalanceWei = await bPool.methods
+                .getBalance(token)
+                .call(undefined, i);
+            let tokenDecimals = await bToken.methods.decimals().call();
+            let normWeight = await bPool.methods
+                .getNormalizedWeight(token)
+                .call(undefined, i);
+
+            let closestPrice = prices[token].reduce((a, b) => {
+                return Math.abs(b[0] - block.timestamp * 1000) <
+                    Math.abs(a[0] - block.timestamp * 1000)
+                    ? b
+                    : a;
+            })[1];
+
+            let tokenBalance = utils.scale(tokenBalanceWei, -tokenDecimals);
+            rawLiquidity[pool.address][token] = tokenBalance.times(bnum(closestPrice)).dp(18);
+
+            if (pool.tokens) {
+                let obj = {
+                    address: token,
+                    normWeight: utils.scale(normWeight, -18),
+                };
+                pool.tokens.push(obj);
+            } else {
+                pool.tokens = [
+                    {
+                        address: token,
+                        normWeight: utils.scale(normWeight, -18),
+                    },
+                ];
+            }
+
+        pool.shareHolders = poolSubgraph.shareHolders;
+        pool.controller = poolSubgraph.controller;
+        pools.push(pool);
     }
+
+    // Build poolOwnershipSharePerLP[pool.address][lpAddress] = share (%) of LP in pool
+    for (const pool of pools) {
+        let bPool = new web3.eth.Contract(poolAbi, pool.poolAddress);
+
+        let bptSupplyWei = await bPool.methods.totalSupply().call(undefined, i);
+        let bptSupply = utils.scale(bptSupplyWei, -18);
+
+        if (bptSupply.eq(bnum(0))) {
+            // Private pool
+            poolOwnershipSharePerLP[pool.address][pool.controller] = 1
+        } else {
+            // Shared pool
+            for (const lpAddress of pool.shareHolders) {
+                let userPoolBalanceWei = await bPool.methods
+                    .balanceOf(holder)
+                    .call(undefined, i);
+                let userPoolBalance = utils.scale(userBalanceWei, -18);
+
+                poolOwnershipSharePerLP[pool.address][lpAddress] = 
+                    userPoolBalance/bptSupply
+            }
+        }
+    }
+
+    return [rawLiquidity, pools, poolOwnershipSharePerLP];
 }
 
-//// 1st iteration
-// Calculate adjustedLiquidity without without balMultiplier
-[totalAdjustedLiquidityWOBalMultiplier, balAmountPerLP] = 
-    getAdjustedLiquidity(rawLiquidity, pools, 
-    tokenCapFactors, stakingCapFactor, 1);
 
-//// 2nd iteration
-// Calculate stakingCapFactor based on how much more totalAdjustedLiquidity we'd have with balMultiplier
-// compared to totalAdjustedLiquidity calculated above without balMultiplier
-[totalAdjustedLiquidityWithBalMultiplier, balAmountPerLP] = 
-    getAdjustedLiquidity(rawLiquidity, pools, 
-    tokenCapFactors, stakingCapFactor, balMultiplier);
-let balMultiplierIncreasePercentage = 
-        totalAdjustedLiquidityWithBalMultiplier
-        .div(totalAdjustedLiquidityWOBalMultiplier)
-        .minus(bnum(1));
-
-if (balMultiplierIncreasePercentage > stakingPercentageIncreaseCap){
-    stakingCapFactor = stakingPercentageIncreaseCap
-        .div(balMultiplierIncreasePercentage)
-    //// 3rd and last iteration
-    // Since stakingCapFactor had to be applied we have to run the calculation again to correct for it
-    // Calculate distro with balMultiplier corrected by the stakingCapFactor
-    [totalAdjustedLiquidityWithBalMultiplier, balAmountPerLP] = 
-    getAdjustedLiquidity(rawLiquidity, pools, 
-    tokenCapFactors, stakingCapFactor, balMultiplier.times(stakingCapFactor));
-} 
 
 
 
