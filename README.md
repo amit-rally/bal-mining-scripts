@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://circleci.com/gh/balancer-labs/bal-mining-scripts">
+    <img src="https://circleci.com/gh/balancer-labs/bal-mining-scripts.svg?style=svg&circle-token=db53593d79ee15541ab28196fc94a03abae5f983" />
+  </a>
+</p>
+
 <h1 align=center><code>BAL Mining</code></h1>
 
 Set of scripts to calculate weekly BAL liquidity mining distributions
