@@ -4,9 +4,10 @@
     "main": "index.js",
     "scripts": {
         "start": "node index.js",
+        "build": "babel ./src --out-dir lib --extensions '.ts,.tsx'",
         "sum": "node sum.js",
         "timestamps": "node timestamps.js",
-        "test": "mocha test/*"
+        "test": "mocha --require babel-polyfill test/*"
     },
     "husky": {
         "hooks": {
@@ -21,11 +22,20 @@
         "isomorphic-fetch": "^2.2.1",
         "prettier": "^2.0.5",
         "pretty-quick": "^2.0.1",
+        "typescript": "^3.9.7",
         "web3": "^1.2.7",
         "yargs": "^15.3.1"
     },
     "devDependencies": {
-        "mocha": "^8.1.1",
-        "chai": "^4.2.0"
+        "@babel/cli": "^7.10.5",
+        "@babel/core": "^7.11.1",
+        "@babel/preset-env": "^7.11.0",
+        "@babel/preset-typescript": "^7.10.4",
+        "@types/node": "^14.0.13",
+        "@typescript-eslint/eslint-plugin": "^2.33.0",
+        "@typescript-eslint/parser": "^2.33.0",
+        "babel-polyfill": "^6.26.0",
+        "chai": "^4.2.0",
+        "mocha": "^8.1.1"
     }
 }

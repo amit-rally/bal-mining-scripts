@@ -2,7 +2,7 @@ const { expect, assert } = require('chai');
 const {
     getFeeFactor,
     getBalFactor,
-    getRatioFactor,
+    getBalAndRatioFactor,
     getWrapFactor,
 } = require('../lib/factors');
 const { BAL_TOKEN } = require('../lib/tokens');
@@ -98,7 +98,7 @@ describe('ratio factor', () => {
         let tokens = [SNX_TOKEN, BAL_TOKEN];
         let weights = [bnum(0.75), bnum(0.25)];
         const expectedResult = 0.75;
-        const result = getRatioFactor(tokens, weights);
+        const result = getBalAndRatioFactor(tokens, weights);
 
         assert.equal(
             result.toNumber(),

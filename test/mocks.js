@@ -48,6 +48,13 @@ const mockPoolContract = {
                 },
             };
         },
+        balanceOf: function () {
+            return {
+                call: function (token) {
+                    return 10;
+                },
+            };
+        },
         getNormalizedWeight: function () {
             return {
                 call: function (token) {
@@ -59,6 +66,13 @@ const mockPoolContract = {
             return {
                 call: function (token) {
                     return mockPool.swapFee;
+                },
+            };
+        },
+        totalSupply: function () {
+            return {
+                call: function (token) {
+                    return 100;
                 },
             };
         },
@@ -84,6 +98,9 @@ const mockWeb3 = {
             } else {
                 return mockPoolContract;
             }
+        },
+        getBlock: function (blockNum) {
+            return mockBlock;
         },
     },
     utils: realWeb3.utils,
